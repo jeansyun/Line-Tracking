@@ -1,0 +1,497 @@
+#include "derivative.h" /* include peripheral declarations */
+#include "TFC\TFC.h"
+
+#define CENTER 60
+
+/* Function Calls */
+
+void Compute();
+
+//working variables for compute routine
+unsigned long ClastTime, CSampleTime, CSampleTimeInSec;
+float CInput, COutput, CSetpoint, Cerror;
+float CITerm, ClastInput;
+float Ckp, Cki, Ckd;
+float CoutMin, CoutMax;
+
+uint16_t vfn_new_position(uint16_t value){ 
+					
+	uint16_t value1 =0;
+
+	if ((value > 0) && (value <=10))   { value1= 160; }
+	if ((value > 108) && (value <=129)){ value1= 66; }
+	value1 = (((108-value)*47)/49)+66;
+	return value1;
+}
+
+uint16_t vfn_new_speed(uint16_t value){ 
+					
+	uint16_t value1 =0;
+					
+	if ((value > 0) && (value <=10))   { value1= 20; }
+	if ((value > 108) && (value <=129)){ value1= 20; }
+	if ((value > 10) && (value <= 59)){ value1 = (((value-59)*50)/49)+70;}
+	if ((value > 59) && (value <= 108)){ value1 = (((108-value)*50)/49)+20;}
+	return value1;
+}
+
+
+/* Initialization of Global Variables */
+int PWM_DUTY_CYCLE_LEFT_MOTOR = 0;
+int PWM_DUTY_CYCLE_RIGHT_MOTOR = 0;
+short PWM_DUTY_CYCLE_SERVO =0;
+short MAX_DUTY_CYCLE=90;
+uint16_t MAX_VALUE = 0;
+uint16_t MIN_VALUE = 0;
+uint16_t MIN_VALUE1 =0;
+uint16_t AVERAGE_VALUE=0;
+uint16_t CURRENT_VALUE=0;
+uint16_t SUM_VALUE=0;
+uint16_t VALUE_ADQUIRED = 0;
+uint16_t VALUE_ADQUIRED_COUNT =0;
+int SCAN_STATE=0;
+uint16_t STEER_ANGLE=0;
+uint16_t SPEED = 10;
+uint16_t i = 0;
+uint16_t analog=0;
+uint16_t angle =0;
+int y = 0;
+int z = 0;
+
+
+
+int main(void)
+ {
+	//uint32_t LineScanAvgTimeD, t, Delta, i=0;
+		uint16_t  LineScanTemp[128],LSarray[128], LSavg, Ledge, Redge, Center, GoodRedge, GoodLedge;
+		float	TmpLSavg;
+		TFC_HBRIDGE_DISABLE;
+		CSetpoint = 64;		//Sets the target, min and max outs for the PID routine
+		CoutMin = -1.0;
+		CoutMax =  1.0;
+		//************************ Set the k values****************
+		Ckp = .1;
+		Cki = .0000001;
+		Ckd = .1;
+		CSampleTimeInSec = ((float)CSampleTime)/1000;
+		   Ckp = Ckp;
+		   Cki = Cki * CSampleTimeInSec;
+		   Ckd = Ckd / CSampleTimeInSec;
+		//Set the line scan exposure time
+		 LineScanAvgTimeD = 1000;
+	//uint32_t t, i=0, Delta;
+	//uint16_t  LineScanTemp[128],LSarray[128], LSavg, Ledge, Redge, Center, GoodRedge, GoodLedge;
+	//float	TmpLSavg;
+	
+	TFC_Init();
+	t = 0;
+	i = 0;
+	
+	TFC_Ticker[3] = 0;
+	while (!(TFC_PUSH_BUTTON_0_PRESSED)){ 
+	
+		while (TFC_Ticker[3]<1000) continue;
+		TFC_Ticker[3] = 0;
+		TFC_BAT_LED0_ON;
+		while (TFC_Ticker[3]<1000) continue;
+		TFC_Ticker[3] = 0;
+		TFC_BAT_LED0_OFF;
+	}
+	TFC_Ticker[3] = 0;
+	while (TFC_Ticker[3]<2000) continue;		//wait 2 seconds p button push
+	
+	for(;;)
+	{	   
+		//TFC_Task must be called in your main loop.  This keeps certain processing happy (I.E. Serial port queue check)
+			TFC_Task();
+
+			//This Demo program will look at the middle 2 switch to select one of 4 demo modes.
+			//Let's look at the middle 2 switches
+			switch((TFC_GetDIP_Switch()>>1)&0x03)
+			{
+			default:
+			case 0 :
+				//Demo mode 0 just tests the switches and LED's
+				if(TFC_PUSH_BUTTON_0_PRESSED)
+					TFC_BAT_LED0_ON;
+				else
+					TFC_BAT_LED0_OFF;
+				
+				if(TFC_PUSH_BUTTON_1_PRESSED)
+					TFC_BAT_LED3_ON;
+				else
+					TFC_BAT_LED3_OFF;
+				
+				
+				if(TFC_GetDIP_Switch()&0x01)
+					TFC_BAT_LED1_ON;
+				else
+					TFC_BAT_LED1_OFF;
+				
+				if(TFC_GetDIP_Switch()&0x08)
+					TFC_BAT_LED2_ON;
+				else
+					TFC_BAT_LED2_OFF;
+				
+				break;
+					
+			case 1:
+				
+				//Demo mode 1 will just move the servos with the on-board potentiometers
+				if(TFC_Ticker[0]>=20)
+				{
+					TFC_Ticker[0] = 0; //reset the Ticker
+					//Every 20 mSeconds, update the Servos
+					TFC_SetServo(0,TFC_ReadPot(0));
+					TFC_SetServo(1,TFC_ReadPot(1));
+				}
+				//Let's put a pattern on the LEDs
+				if(TFC_Ticker[1] >= 125)
+				{
+					TFC_Ticker[1] = 0;
+					t++;
+					if(t>4)
+					{
+						t=0;
+					}			
+					TFC_SetBatteryLED_Level(t);
+				}
+				
+				TFC_SetMotorPWM(0,0); //Make sure motors are off
+				TFC_HBRIDGE_DISABLE;
+			
+
+				break;
+				
+			case 2 :
+				
+				//Demo Mode 2 will use the Pots to make the motors move
+				TFC_HBRIDGE_ENABLE;
+				TFC_SetMotorPWM(TFC_ReadPot(0),TFC_ReadPot(1));
+						
+				//Let's put a pattern on the LEDs
+				if(TFC_Ticker[1] >= 125)
+					{
+						TFC_Ticker[1] = 0;
+							t++;
+							if(t>4)
+							{
+								t=0;
+							}			
+						TFC_SetBatteryLED_Level(t);
+					}
+				break;
+			
+			case 3 :
+			
+				//Demo Mode 3 will be in Freescale Garage Mode.  It will beam data from the Camera to the 
+								//Labview Application
+							
+
+
+
+								TFC_SetServo(0,0.0);						//center wheels
+								TFC_HBRIDGE_DISABLE;
+								TFC_HBRIDGE_ENABLE;
+								
+								TFC_SetMotorPWM(TFC_ReadPot(0),TFC_ReadPot(0));	//start motor at post 0 setting			
+						
+								if(TFC_Ticker[0]>100 && LineScanImageReady==1)
+									{
+									 TFC_Ticker[0] = 0;
+									 LineScanImageReady=0;
+
+									 
+										//  Here is the line scan processing for black line detection Method #2
+									LSavg = 0;
+									TmpLSavg = 0.0;
+							
+									 for(i=0;i<128;i++)   //first save the line to the temp file
+									 {
+										 	 LineScanTemp[i] = LineScanImage0[i];
+										 	 LSarray[i] = LineScanTemp[i];
+									 }
+									 for(i=0;i<128;i++)  // Now get the average
+									 {
+										 	 TmpLSavg += LineScanTemp[i];
+									 }
+									 LSavg = (uint16_t) ((TmpLSavg / 128.0)*.8) ;
+									 //TERMINAL_PRINTF("Average = %X,", LSavg);					 
+									 for(i=0;i<128;i++)
+									 {	 
+										if (LineScanTemp[i] >= LSavg)   //this turns the line scan into only 2000 or 50 values and shifts the avg down by 20 for a 1
+										 LSarray[i] = 2000;
+										else
+										 LSarray[i] = 50;
+				 				     }	 
+									 
+									 //  Determine edge detection
+									 // Start from middle +/- 20-30 or so and search both ways  Only require a single point dip for line
+									 Ledge = 70 ;  //dont change these with out changing if statements !!!
+									 Redge = 56 ;
+									 for (i=84; i > 4 ;i--)
+									 { 
+										if ((LineScanTemp[i]-LineScanTemp[i-1]) > 400)    //Looking for a drop of at least 400 for a line
+										{
+											Ledge = i;        // This is the first edge to the left
+											break;
+										}
+									
+										
+										
+									 }
+									 
+										GoodLedge = 0;
+									 for (i=Ledge; i>=4; i--)
+									 {
+											if ((LSarray[i] == 2000 )&&(LSarray[i-1] == 2000))  //need two points of white
+											{
+												GoodLedge = 1;
+												break;
+											}
+									 }
+									 
+									 //  Now look for the Right edge
+									
+									 for (i=44;i<124;i++)
+									 {
+											if ((LineScanTemp[i]-LineScanTemp[i+1]) > 400)
+											{
+												Redge = i;
+												break;
+											}
+									 }
+									 //  Now check for white space after edge/  this may not be relavent on some tracks
+										GoodRedge = 0;
+									 for (i=Redge;i<124;i++)
+									 {
+											if ((LSarray[i] == 2000 )&&(LSarray[i+1] == 2000))  //need two points of white
+											{
+												GoodRedge = 1;
+												break;
+											}
+									 }
+									 
+									 
+									 // Now set the 2 edges in LSarray so we can see them
+									 LSarray[Redge] = 3500;
+									 LSarray[Ledge] = 2500;
+									 LSarray[127-GoodRedge] = 400;
+									 LSarray[GoodLedge] = 200;					 
+									 
+									 //Calculate distance between lines
+									 Delta = Redge-Ledge;
+									 LSarray[Delta] += 150;
+									 //calculate center
+									 Center = Ledge + ((Redge - Ledge)/2);
+									 if (Ledge <= 5)  Center = Redge - 40;
+									 if (Redge >=123)  Center = Ledge + 40;
+									 LSarray[Center] = 4000;
+									 
+									 	if(t==0)
+									 		t=3;
+									 	else
+									 		t--;
+									 	
+										 TFC_SetBatteryLED_Level(t);					 
+										 TERMINAL_PRINTF("\r\n");
+										 TERMINAL_PRINTF("L:");						
+										 for(i=0;i<128;i++)
+										 {
+												 TERMINAL_PRINTF("%X,",LineScanTemp[i]);
+										 }
+										
+										 for(i=0;i<128;i++)
+										 {
+												 TERMINAL_PRINTF("%X",LSarray[i]);
+												 if(i==127)
+													 TERMINAL_PRINTF("\r\n",LSarray[i]);
+												 else
+													 TERMINAL_PRINTF(",",LSarray[i]);
+										}										
+											
+									}
+									
+				
+				 //Steer Angle and Speed Algorithm
+				 					
+								if (Center >=60 && Center <= 75)				//center
+				 						 TFC_SetServo(0,0.0);
+				 					 
+									if(Center<=60){								//turn right half
+									if (Center >=56 && Center <=59 ){                          //turning servo to the right(left line code)
+				 						 STEER_ANGLE=vfn_new_position(Center);
+				 							if (STEER_ANGLE>113 && STEER_ANGLE<117 )
+				 							TFC_SetServo(0,-0.10497);
+				 							}
+				 					
+				 					 if (Center >=51 && Center <=55 ){                                    
+				 					 	STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>116 && STEER_ANGLE<122 )
+				 					 			TFC_SetServo(0,-0.15187);
+				 					 					 }
+				 					 if (Center >= 46 && Center <=50 ){
+				 					 	STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>121 && STEER_ANGLE<127 )
+				 					 			TFC_SetServo(0,-0.2375);
+				 					 					 }
+				 					 if (Center >=41 && Center <=45 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>126 && STEER_ANGLE<132 )
+				 					 			TFC_SetServo(0,-0.32312);
+				 					 					 }
+				 					 if (Center >=36 && Center <=40 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>131 && STEER_ANGLE<137 )
+				 					 			TFC_SetServo(0,-0.43875);
+				 					 			}
+				 					 if (Center >=31 && Center <=35 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>136 && STEER_ANGLE<146 )
+				 					 			TFC_SetServo(0,-0.5262);
+				 					 			
+				 					 					 } 
+				 					if (Center >=26 && Center <=30 ){
+				 								STEER_ANGLE=vfn_new_position(Center);
+				 								if (STEER_ANGLE>136 && STEER_ANGLE<146 )
+				 							    TFC_SetServo(0,-0.6362);
+				 									 					 			
+				 									 	 } 
+				 					if (Center >=21 && Center <=25 ){
+				 						STEER_ANGLE=vfn_new_position(Center);
+				 						if (STEER_ANGLE>136 && STEER_ANGLE<146 )
+				 					    TFC_SetServo(0,-0.7262);
+				 						
+				 									 					 			
+				 									}
+				 					if (Center >=16 && Center <=20 ){
+				 						STEER_ANGLE=vfn_new_position(Center);
+				 						if (STEER_ANGLE>136 && STEER_ANGLE<146 )
+				 						TFC_SetServo(0,-0.8362);
+				 					}
+				 					if (Center >=11 && Center <=15 ){
+				 						STEER_ANGLE=vfn_new_position(Center);
+				 						if (STEER_ANGLE>136 && STEER_ANGLE<146 )
+				 						TFC_SetServo(0,-0.9262);
+				 									 					
+				 					}
+				 					 if (Center <  10){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE> 66 && STEER_ANGLE< 79)
+				 					 			TFC_SetServo(0,-1.0000);
+				 					 }
+									} //end of first half
+				 					 
+				 					 	 if(Center>=75){								//turns left half
+			
+												if (Center >=80 && Center <=76){                              //turning servo to the left(right line code)
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>98 && STEER_ANGLE<102 )
+				 					 			TFC_SetServo(0,+0.10497); 
+				 					 					 }
+				 					 if (Center >=85 && Center <= 81){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>93 && STEER_ANGLE<99 )
+				 					 			TFC_SetServo(0,+0.15187);
+				 					 					 }
+				 					 if (Center >= 90 && Center <= 86 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>89 && STEER_ANGLE<93 )
+				 					 			TFC_SetServo(0,+0.2375);
+				 					 					 }
+				 					 if (Center >= 95 && Center <= 91 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>84 && STEER_ANGLE<89 )
+				 					 			TFC_SetServo(0,+0.32312);
+				 					 					 }
+
+				 					 if (Center >= 100 && Center <= 96 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>79 && STEER_ANGLE<84 )
+				 					 			TFC_SetServo(0,+0.43875);
+				 					 					 }
+
+				 					 if (Center >= 105 && Center <= 101 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>66 && STEER_ANGLE< 79)
+				 					 			TFC_SetServo(0,+0.5262);
+				 					 					 }
+				 					 if (Center >= 110 && Center <= 106 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>66 && STEER_ANGLE< 79)
+				 					 			TFC_SetServo(0,+0.6362);
+				 					 					 }
+				 					 if (Center >= 115 && Center <= 111 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>66 && STEER_ANGLE< 79)
+				 					 			TFC_SetServo(0,+0.7262);
+				 					 					 }	
+				 					if (Center >= 120 && Center <= 116 ){
+				 								STEER_ANGLE=vfn_new_position(Center);
+				 								if (STEER_ANGLE>66 && STEER_ANGLE< 79)
+				 								TFC_SetServo(0,+0.8362);
+				 										}
+				 					if (Center >= 125 && Center <= 121 ){
+				 								STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>66 && STEER_ANGLE< 79)
+				 					 			TFC_SetServo(0,+0.9262);
+				 									 	 }	
+				 					 					 
+				 					 if (Center > 126 ){
+				 					 			STEER_ANGLE=vfn_new_position(Center);
+				 					 			if (STEER_ANGLE>66 && STEER_ANGLE< 79)
+				 					 			TFC_SetServo(0,+1.0000);
+				 					 					 }
+				 					 	 }//end of left half
+				break;
+				CInput = Center;
+							Compute();
+							TFC_SetServo(0,COutput);
+							break;
+						   //end of Case
+						
+					}   //end of Case
+			
+	}   // end of infinite for
+	
+	return 0;
+}  // end of main
+void Compute()
+{
+	float CdInput;
+   
+      /*Compute all the working error variables*/
+      Cerror = CSetpoint - CInput;
+      CITerm += (Cki * Cerror);
+      if(CITerm > CoutMax) CITerm = CoutMax;
+      else if(CITerm < CoutMin) CITerm = CoutMin;
+      CdInput = (CInput - ClastInput);
+ 
+      /*Compute PID Output*/
+      COutput = Ckp * Cerror + CITerm- Ckd * CdInput;
+      if(COutput > CoutMax) COutput = CoutMax;
+      else if(COutput < CoutMin) COutput = CoutMin;
+ 
+      /*Remember some variables for next time*/
+      ClastInput = CInput;
+   
+}
+ 
+0.10497
+0.15187
+0.2375
+0.32312
+0.43875
+0.5262
+0.6362
+0.7262
+0.8362
+0.9262
+1.0000
+
+
+
+
+
+
+
